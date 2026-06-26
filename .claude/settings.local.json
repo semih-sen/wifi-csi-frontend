@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la e:/dev/wifi/frontend && echo \"---PARENT---\" && ls -la e:/dev/wifi)",
+      "Read(//e/dev/wifi/**)",
+      "Bash(npm --version)",
+      "Bash(xargs grep -l -i -E \"Hub|ReceiveCsiData|RecordingStatus\")",
+      "Bash(npm install *)"
+    ]
+  }
+}
