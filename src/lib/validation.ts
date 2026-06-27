@@ -71,6 +71,7 @@ export function parseRecordingStatus(p: unknown): RecordingStatus | null {
     !isBool(p.isRecording) ||
     !isNum(p.sessionId) ||
     !isStr(p.label) ||
+    !isStr(p.subject) ||
     !isNum(p.framesCaptured) ||
     !isNum(p.framesDropped) ||
     !isNum(p.startedAtUnixMs)
@@ -81,6 +82,7 @@ export function parseRecordingStatus(p: unknown): RecordingStatus | null {
     isRecording: p.isRecording,
     sessionId: p.sessionId,
     label: p.label,
+    subject: p.subject,
     framesCaptured: p.framesCaptured,
     framesDropped: p.framesDropped,
     startedAtUnixMs: p.startedAtUnixMs,

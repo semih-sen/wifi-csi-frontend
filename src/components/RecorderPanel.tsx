@@ -34,6 +34,7 @@ export function RecorderPanel() {
 
   const [preset, setPreset] = useState(LABEL_PRESETS[0]);
   const [custom, setCustom] = useState("");
+  const [subject, setSubject] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +49,7 @@ export function RecorderPanel() {
     setError(null);
     setBusy(true);
     try {
-      await startRecording(label || "unlabeled");
+      await startRecording(label || "unlabeled", subject.trim());
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start");
     } finally {
@@ -109,6 +110,20 @@ export function RecorderPanel() {
         )}
       </div>
 
+      {/* Subject — who performed the activity (enables person/gait recognition). */}
+      <div className="flex flex-col gap-2">
+        <label className="text-xs text-slate-400">
+          Subject <span className="text-slate-600">(who — optional)</span>
+        </label>
+        <input
+          value={subject}
+          disabled={isRecording}
+          onChange={(e) => setSubject(e.target.value)}
+          placeholder="e.g. Alice"
+          className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50"
+        />
+      </div>
+
       {/* Live counters */}
       <div className="grid grid-cols-2 gap-3">
         <Stat label="Frames captured" value={recordingStatus?.framesCaptured ?? 0} />
@@ -153,6 +168,7 @@ export function RecorderPanel() {
       {recordingStatus && isRecording && (
         <p className="text-xs text-slate-500">
           Session #{recordingStatus.sessionId} · “{recordingStatus.label}”
+          {recordingStatus.subject && ` · ${recordingStatus.subject}`}
         </p>
       )}
     </section>

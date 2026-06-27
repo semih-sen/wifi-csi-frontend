@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire-contract version this client expects. Must match the backend's GetServerInfo. */
-export const CONTRACT_VERSION = "1.0";
+export const CONTRACT_VERSION = "1.1";
 
 /** `ReceiveCsiData` — one amplitude-vs-subcarrier vector per processing slide (~1–2 Hz). */
 export interface CsiFrame {
@@ -24,6 +24,8 @@ export interface RecordingStatus {
   isRecording: boolean;
   sessionId: number;
   label: string;
+  /** Who performed the activity (e.g. the person walking). Empty when N/A. */
+  subject: string;
   framesCaptured: number;
   framesDropped: number;
   startedAtUnixMs: number;
@@ -81,6 +83,7 @@ export const IDLE_STATUS: RecordingStatus = {
   isRecording: false,
   sessionId: 0,
   label: "",
+  subject: "",
   framesCaptured: 0,
   framesDropped: 0,
   startedAtUnixMs: 0,

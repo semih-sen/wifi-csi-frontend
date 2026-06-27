@@ -45,7 +45,7 @@ interface RadarContextValue {
   connectionState: ConnectionState;
   /** True once we've heard back from the server at least once. */
   recordingStatus: RecordingStatus | null;
-  startRecording: (label: string) => Promise<void>;
+  startRecording: (label: string, subject?: string) => Promise<void>;
   stopRecording: () => Promise<void>;
   /** Subscribe to a hub event. Returns an unsubscribe fn. Safe to call pre-connect. */
   on: (event: string, handler: EventHandler) => () => void;
@@ -245,13 +245,13 @@ export function RadarConnectionProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startRecording = useCallback(async (label: string) => {
+  const startRecording = useCallback(async (label: string, subject = "") => {
     const c = connectionRef.current;
     if (!c || c.state !== HubConnectionState.Connected) {
       throw new Error("Not connected");
     }
     // We rely on the broadcast RecordingState for UI; return value is ignored.
-    await c.invoke(HubMethod.StartRecording, label);
+    await c.invoke(HubMethod.StartRecording, label, subject);
   }, []);
 
   const stopRecording = useCallback(async () => {
