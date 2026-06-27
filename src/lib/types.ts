@@ -1,7 +1,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Backend SignalR contract (authoritative — see FRONTEND_README.md §2).
-// All typed DTOs are camelCase. ReceiveStatus is the one PascalCase exception.
+// Backend SignalR contract. Canonical definition: /CONTRACTS.md (Seam B).
+// Every event/DTO is camelCase — there is no PascalCase exception anymore.
+// Payloads are validated at the connection boundary (lib/validation.ts), never cast.
 // ─────────────────────────────────────────────────────────────────────────────
+
+/** Wire-contract version this client expects. Must match the backend's GetServerInfo. */
+export const CONTRACT_VERSION = "1.0";
 
 /** `ReceiveCsiData` — one amplitude-vs-subcarrier vector per processing slide (~1–2 Hz). */
 export interface CsiFrame {
@@ -33,13 +37,22 @@ export interface InferenceResult {
   timestampMs: number;
 }
 
-/**
- * `ReceiveStatus` — confirmed automation change (Phase 4).
- * ⚠️ PascalCase on the wire, unlike every other event (README §2.2).
- */
+/** `ReceiveStatus` — confirmed automation change (camelCase, like every other event). */
 export interface StatusEvent {
-  Status: string;
-  Timestamp: string;
+  status: string;
+  /** Unix epoch milliseconds. */
+  timestampMs: number;
+}
+
+/** `GetServerInfo` return value — the contract handshake read on connect (Seam B.3). */
+export interface ServerInfo {
+  contractVersion: string;
+  windowSize: number;
+  slideStep: number;
+  sampleRateHz: number;
+  subcarrierCount: number;
+  modelLoaded: boolean;
+  classes: string[];
 }
 
 /** SignalR event names, server → client. */
@@ -55,6 +68,7 @@ export const HubMethod = {
   StartRecording: "StartRecording",
   StopRecording: "StopRecording",
   GetRecordingStatus: "GetRecordingStatus",
+  GetServerInfo: "GetServerInfo",
 } as const;
 
 export type ConnectionState =

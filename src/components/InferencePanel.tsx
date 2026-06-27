@@ -10,10 +10,11 @@ export function InferencePanel() {
   const [status, setStatus] = useState<StatusEvent | null>(null);
 
   useEffect(() => {
+    // Payloads are already validated at the connection boundary (Seam B.2), so these
+    // casts are safe — the bus never dispatches a malformed payload.
     const offInf = on(HubEvent.Inference, (p) =>
       setInference(p as InferenceResult),
     );
-    // ⚠️ PascalCase payload, unlike every other event (README §2.2).
     const offStatus = on(HubEvent.Status, (p) => setStatus(p as StatusEvent));
     return () => {
       offInf();
@@ -32,7 +33,7 @@ export function InferencePanel() {
           Inference
         </h2>
         {status && (
-          <span className="text-xs text-slate-400">{status.Status}</span>
+          <span className="text-xs text-slate-400">{status.status}</span>
         )}
       </header>
 
