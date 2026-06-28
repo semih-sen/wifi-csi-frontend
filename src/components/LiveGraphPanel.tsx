@@ -36,12 +36,16 @@ function baseOpts(): Partial<uPlot.Options> {
 }
 
 export function LiveGraphPanel() {
-  const { on, mockActive, connectionState } = useRadar();
+  const { on, mockActive, connectionState, calibration } = useRadar();
 
   const spectrumRef = useRef<HTMLDivElement | null>(null);
   const timeRef = useRef<HTMLDivElement | null>(null);
   const spectrumPlot = useRef<uPlot | null>(null);
   const timePlot = useRef<uPlot | null>(null);
+  // When a baseline is active the amplitudes swing around 0, so the y-scale is locked
+  // symmetric about zero — the x-axis (y=0) stays centred and the trace moves up/down.
+  // The charts are built once; this ref lets the scale/draw fns read the live state.
+  const calibratedRef = useRef(false);
 
   // Incoming data lands in refs; the rAF loop reads them — never React state
   // per event (README §6: decouple render from event rate).
@@ -71,12 +75,40 @@ export function LiveGraphPanel() {
     const sw = spectrumRef.current.clientWidth || 600;
     const tw = timeRef.current.clientWidth || 600;
 
+    // Y-range: symmetric about 0 once calibrated (keeps the zero line centred and lets
+    // the trace move up/down); otherwise uPlot's normal padded auto-range.
+    const yRange = (_u: uPlot, dataMin: number, dataMax: number): [number, number] => {
+      if (!Number.isFinite(dataMin) || !Number.isFinite(dataMax)) return [-1, 1];
+      if (calibratedRef.current) {
+        const m = Math.max(Math.abs(dataMin), Math.abs(dataMax)) || 1;
+        return [-m, m];
+      }
+      return uPlot.rangeNum(dataMin, dataMax, 0.1, true) as [number, number];
+    };
+
+    // Draw the centred x-axis (y=0) reference line while calibrated.
+    const drawZeroLine = (u: uPlot) => {
+      if (!calibratedRef.current) return;
+      const yPx = u.valToPos(0, "y", true);
+      const { ctx } = u;
+      ctx.save();
+      ctx.beginPath();
+      ctx.strokeStyle = "rgba(148,163,184,0.5)";
+      ctx.setLineDash([4, 4]);
+      ctx.lineWidth = 1;
+      ctx.moveTo(u.bbox.left, yPx);
+      ctx.lineTo(u.bbox.left + u.bbox.width, yPx);
+      ctx.stroke();
+      ctx.restore();
+    };
+
     spectrumPlot.current = new uPlot(
       {
         ...baseOpts(),
         width: sw,
         height: 220,
-        scales: { x: { time: false } },
+        scales: { x: { time: false }, y: { range: yRange } },
+        hooks: { draw: [drawZeroLine] },
         series: [
           {},
           { stroke: "#38bdf8", width: 1.5, fill: "rgba(56,189,248,0.12)" },
@@ -91,7 +123,8 @@ export function LiveGraphPanel() {
         ...baseOpts(),
         width: tw,
         height: 220,
-        scales: { x: { time: false } },
+        scales: { x: { time: false }, y: { range: yRange } },
+        hooks: { draw: [drawZeroLine] },
         series: [
           {},
           { stroke: "#a78bfa", width: 1.5 },
@@ -121,6 +154,14 @@ export function LiveGraphPanel() {
       timePlot.current = null;
     };
   }, []);
+
+  // Re-apply the y-scale (centred vs auto) the instant calibration state flips, even
+  // if no new frame has arrived yet, by re-feeding each plot its current data.
+  useEffect(() => {
+    calibratedRef.current = calibration.baselineActive;
+    spectrumPlot.current?.setData(spectrumPlot.current.data);
+    timePlot.current?.setData(timePlot.current.data);
+  }, [calibration.baselineActive]);
 
   // ── Subscribe to the CSI stream ────────────────────────────────────────────
   useEffect(() => {
@@ -186,6 +227,14 @@ export function LiveGraphPanel() {
           {mockActive && (
             <span className="rounded-full bg-fuchsia-500/15 px-2 py-0.5 text-fuchsia-300">
               MOCK
+            </span>
+          )}
+          {calibration.baselineActive && (
+            <span
+              title="Baseline active — y-axis locked symmetric about 0"
+              className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-emerald-300"
+            >
+              0-CENTERED
             </span>
           )}
           {meta && (

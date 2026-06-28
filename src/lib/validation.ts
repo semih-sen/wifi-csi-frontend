@@ -7,6 +7,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import type {
+  CalibrationState,
   CsiFrame,
   InferenceResult,
   RecordingStatus,
@@ -86,6 +87,8 @@ export function parseRecordingStatus(p: unknown): RecordingStatus | null {
     framesCaptured: p.framesCaptured,
     framesDropped: p.framesDropped,
     startedAtUnixMs: p.startedAtUnixMs,
+    // Additive in contract 1.3; tolerate an older backend that omits it.
+    stopAtUnixMs: isNum(p.stopAtUnixMs) ? p.stopAtUnixMs : 0,
   };
 }
 
@@ -98,7 +101,9 @@ export function parseServerInfo(p: unknown): ServerInfo | null {
     !isNum(p.sampleRateHz) ||
     !isNum(p.subcarrierCount) ||
     !isBool(p.modelLoaded) ||
-    !isStrArray(p.classes)
+    !isStrArray(p.classes) ||
+    !isBool(p.isCalibrating) ||
+    !isBool(p.baselineActive)
   ) {
     return null;
   }
@@ -110,5 +115,27 @@ export function parseServerInfo(p: unknown): ServerInfo | null {
     subcarrierCount: p.subcarrierCount,
     modelLoaded: p.modelLoaded,
     classes: p.classes,
+    isCalibrating: p.isCalibrating,
+    baselineActive: p.baselineActive,
+  };
+}
+
+export function parseCalibrationState(p: unknown): CalibrationState | null {
+  if (!isObject(p)) return null;
+  if (
+    !isBool(p.isCalibrating) ||
+    !isBool(p.baselineActive) ||
+    !isNum(p.framesRequested) ||
+    !isNum(p.timestampMs)
+  ) {
+    return null;
+  }
+  return {
+    isCalibrating: p.isCalibrating,
+    baselineActive: p.baselineActive,
+    // `failed` is additive; tolerate an older backend that omits it.
+    failed: isBool(p.failed) ? p.failed : false,
+    framesRequested: p.framesRequested,
+    timestampMs: p.timestampMs,
   };
 }

@@ -23,6 +23,7 @@ import {
   HubMethod,
 } from "@/lib/types";
 import {
+  parseCalibrationState,
   parseCsiFrame,
   parseInferenceResult,
   parseRecordingStatus,
@@ -41,11 +42,23 @@ const VALIDATORS: Record<string, (p: unknown) => unknown | null> = {
   [HubEvent.RecordingState]: parseRecordingStatus,
 };
 
+/** Baseline-calibration state surfaced to the UI. */
+interface CalibrationView {
+  isCalibrating: boolean;
+  baselineActive: boolean;
+}
+
+const NO_CALIBRATION: CalibrationView = { isCalibrating: false, baselineActive: false };
+
 interface RadarContextValue {
   connectionState: ConnectionState;
   /** True once we've heard back from the server at least once. */
   recordingStatus: RecordingStatus | null;
-  startRecording: (label: string, subject?: string) => Promise<void>;
+  startRecording: (
+    label: string,
+    subject?: string,
+    durationMs?: number,
+  ) => Promise<void>;
   stopRecording: () => Promise<void>;
   /** Subscribe to a hub event. Returns an unsubscribe fn. Safe to call pre-connect. */
   on: (event: string, handler: EventHandler) => () => void;
@@ -57,6 +70,14 @@ interface RadarContextValue {
   contractMismatch: boolean;
   /** Manually re-establish the connection after automatic reconnect was exhausted. */
   reconnect: () => void;
+  /** Baseline (tare) calibration state. */
+  calibration: CalibrationView;
+  /** Trigger an empty-room baseline calibration (captures ~5 s of frames server-side). */
+  calibrate: () => Promise<void>;
+  /** Set when a calibration request did not complete (e.g. no CSI frames arriving). */
+  calibrationError: string | null;
+  /** True while real CSI frames are arriving from the backend (not the mock emitter). */
+  hasLiveData: boolean;
 }
 
 const RadarContext = createContext<RadarContextValue | null>(null);
@@ -90,8 +111,17 @@ export function RadarConnectionProvider({
     useState<RecordingStatus | null>(null);
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
   const [contractMismatch, setContractMismatch] = useState(false);
+  const [calibration, setCalibration] = useState<CalibrationView>(NO_CALIBRATION);
+  const [calibrationError, setCalibrationError] = useState<string | null>(null);
+  const [hasLiveData, setHasLiveData] = useState(false);
 
   const connectionRef = useRef<HubConnection | null>(null);
+  // Safety timer: if a calibration never reports completion (e.g. no CSI frames are
+  // arriving), reset the UI instead of hanging on "Calibrating…" forever.
+  const calTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Wall-clock of the last REAL (backend) CSI frame — drives hasLiveData and the
+  // "no data" guard on calibrate(). Mock frames intentionally don't count here.
+  const lastCsiAtRef = useRef(0);
   // StrictMode (dev) double-invokes effects; this guards against a second start.
   const startedRef = useRef(false);
   // Local event bus: bridges both real hub events and the mock emitter so panels
@@ -150,6 +180,12 @@ export function RadarConnectionProvider({
         return;
       }
       setServerInfo(info);
+      // Seed the calibration badge from the handshake so a reconnecting client renders
+      // the right state immediately (a CalibrationState event also arrives on connect).
+      setCalibration({
+        isCalibrating: info.isCalibrating,
+        baselineActive: info.baselineActive,
+      });
       const mismatch = info.contractVersion !== CONTRACT_VERSION;
       setContractMismatch(mismatch);
       if (mismatch) {
@@ -199,10 +235,42 @@ export function RadarConnectionProvider({
       setRecordingStatus(status);
       dispatch(HubEvent.RecordingState, status);
     });
-    // Stream + Phase-4 events are forwarded onto the local bus for panels.
-    connection.on(HubEvent.CsiData, (p) => dispatch(HubEvent.CsiData, p));
+    // Stream + Phase-4 events are forwarded onto the local bus for panels. Real CSI
+    // frames also stamp lastCsiAtRef so we know live data is actually flowing.
+    connection.on(HubEvent.CsiData, (p) => {
+      lastCsiAtRef.current = Date.now();
+      dispatch(HubEvent.CsiData, p);
+    });
     connection.on(HubEvent.Inference, (p) => dispatch(HubEvent.Inference, p));
     connection.on(HubEvent.Status, (p) => dispatch(HubEvent.Status, p));
+
+    // Baseline calibration progress (drives the button state + "Baseline: Active" badge).
+    connection.on(HubEvent.Calibration, (raw) => {
+      const cal = parseCalibrationState(raw);
+      if (!cal) {
+        console.error("[radar] dropped invalid CalibrationState payload", raw);
+        return;
+      }
+      setCalibration({
+        isCalibrating: cal.isCalibrating,
+        baselineActive: cal.baselineActive,
+      });
+      // A definitive (finished) state clears the optimistic safety timer and resolves
+      // the outcome: failure → explain why; success → clear any stale error.
+      if (!cal.isCalibrating) {
+        if (calTimeoutRef.current) {
+          clearTimeout(calTimeoutRef.current);
+          calTimeoutRef.current = null;
+        }
+        if (cal.failed) {
+          setCalibrationError(
+            "Calibration failed — no CSI frames were received. Is the sensor streaming to the broker?",
+          );
+        } else if (cal.baselineActive) {
+          setCalibrationError(null);
+        }
+      }
+    });
 
     connection.onreconnecting(() => setConnectionState("Reconnecting"));
     connection.onreconnected(() => {
@@ -232,10 +300,12 @@ export function RadarConnectionProvider({
 
     return () => {
       stopMock?.();
+      if (calTimeoutRef.current) clearTimeout(calTimeoutRef.current);
       connection.off(HubEvent.RecordingState);
       connection.off(HubEvent.CsiData);
       connection.off(HubEvent.Inference);
       connection.off(HubEvent.Status);
+      connection.off(HubEvent.Calibration);
       // Idempotent: stop() is safe even if never fully connected.
       connection.stop().catch(() => undefined);
       connectionRef.current = null;
@@ -245,14 +315,26 @@ export function RadarConnectionProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const startRecording = useCallback(async (label: string, subject = "") => {
-    const c = connectionRef.current;
-    if (!c || c.state !== HubConnectionState.Connected) {
-      throw new Error("Not connected");
-    }
-    // We rely on the broadcast RecordingState for UI; return value is ignored.
-    await c.invoke(HubMethod.StartRecording, label, subject);
+  // Poll whether real CSI frames are still arriving (stale after ~4 s of silence).
+  useEffect(() => {
+    const id = setInterval(() => {
+      setHasLiveData(Date.now() - lastCsiAtRef.current < 4000);
+    }, 1000);
+    return () => clearInterval(id);
   }, []);
+
+  const startRecording = useCallback(
+    async (label: string, subject = "", durationMs = 0) => {
+      const c = connectionRef.current;
+      if (!c || c.state !== HubConnectionState.Connected) {
+        throw new Error("Not connected");
+      }
+      // We rely on the broadcast RecordingState for UI; return value is ignored.
+      // All three args are sent explicitly — SignalR binds positionally.
+      await c.invoke(HubMethod.StartRecording, label, subject, durationMs);
+    },
+    [],
+  );
 
   const stopRecording = useCallback(async () => {
     const c = connectionRef.current;
@@ -260,6 +342,57 @@ export function RadarConnectionProvider({
       throw new Error("Not connected");
     }
     await c.invoke(HubMethod.StopRecording);
+  }, []);
+
+  const calibrate = useCallback(async () => {
+    const c = connectionRef.current;
+    if (!c || c.state !== HubConnectionState.Connected) {
+      throw new Error("Not connected");
+    }
+    setCalibrationError(null);
+
+    // Fast fail: calibration averages live CSI frames. If none are arriving there is
+    // nothing to average — don't spin, explain the real problem immediately.
+    if (Date.now() - lastCsiAtRef.current > 4000) {
+      setCalibrationError(
+        "No CSI data is reaching the server — start the sensor (ESP32) streaming to the broker before calibrating.",
+      );
+      return;
+    }
+
+    // Optimistically enter the calibrating state for instant UX; the server's
+    // CalibrationState events confirm start and (~5 s later) completion.
+    setCalibration((prev) => ({ ...prev, isCalibrating: true }));
+
+    // Arm the safety net BEFORE awaiting invoke, so a hung/failed invoke can never
+    // leave the UI spinning forever. The server's "finished" event clears it.
+    if (calTimeoutRef.current) clearTimeout(calTimeoutRef.current);
+    calTimeoutRef.current = setTimeout(() => {
+      calTimeoutRef.current = null;
+      setCalibration((prev) =>
+        prev.isCalibrating ? { ...prev, isCalibrating: false } : prev,
+      );
+      setCalibrationError(
+        "Calibration timed out with no completion signal — are CSI frames still streaming?",
+      );
+    }, 14_000);
+
+    try {
+      // Pass an explicit argument: SignalR binds hub args positionally and does NOT
+      // fill C# default parameters, so invoking Calibrate(int frames=500) with zero
+      // args is rejected ("provides 0 argument(s) but target expects 1"). 0 tells the
+      // backend to use its default capture size (~5 s).
+      await c.invoke(HubMethod.Calibrate, 0);
+    } catch (err) {
+      if (calTimeoutRef.current) {
+        clearTimeout(calTimeoutRef.current);
+        calTimeoutRef.current = null;
+      }
+      setCalibration((prev) => ({ ...prev, isCalibrating: false }));
+      const detail = err instanceof Error ? err.message : String(err);
+      setCalibrationError(`Could not start calibration: ${detail}`);
+      throw err;
+    }
   }, []);
 
   return (
@@ -274,6 +407,10 @@ export function RadarConnectionProvider({
         serverInfo,
         contractMismatch,
         reconnect,
+        calibration,
+        calibrate,
+        calibrationError,
+        hasLiveData,
       }}
     >
       {children}

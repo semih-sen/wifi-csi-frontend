@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire-contract version this client expects. Must match the backend's GetServerInfo. */
-export const CONTRACT_VERSION = "1.1";
+export const CONTRACT_VERSION = "1.3";
 
 /** `ReceiveCsiData` — one amplitude-vs-subcarrier vector per processing slide (~1–2 Hz). */
 export interface CsiFrame {
@@ -29,6 +29,8 @@ export interface RecordingStatus {
   framesCaptured: number;
   framesDropped: number;
   startedAtUnixMs: number;
+  /** Unix ms when the recording auto-stops, or 0 for a manual (open-ended) recording. */
+  stopAtUnixMs: number;
 }
 
 /** `ReceiveInference` — per-window classification (Phase 4, not yet emitted). */
@@ -55,6 +57,18 @@ export interface ServerInfo {
   subcarrierCount: number;
   modelLoaded: boolean;
   classes: string[];
+  isCalibrating: boolean;
+  baselineActive: boolean;
+}
+
+/** `CalibrationState` — baseline (tare) progress, pushed on start/finish + on connect. */
+export interface CalibrationState {
+  isCalibrating: boolean;
+  baselineActive: boolean;
+  /** True if the last attempt failed (almost always: no CSI frames were flowing). */
+  failed: boolean;
+  framesRequested: number;
+  timestampMs: number;
 }
 
 /** SignalR event names, server → client. */
@@ -63,6 +77,7 @@ export const HubEvent = {
   RecordingState: "RecordingState",
   Inference: "ReceiveInference",
   Status: "ReceiveStatus",
+  Calibration: "CalibrationState",
 } as const;
 
 /** Hub methods, client → server. */
@@ -71,6 +86,7 @@ export const HubMethod = {
   StopRecording: "StopRecording",
   GetRecordingStatus: "GetRecordingStatus",
   GetServerInfo: "GetServerInfo",
+  Calibrate: "Calibrate",
 } as const;
 
 export type ConnectionState =
@@ -87,4 +103,5 @@ export const IDLE_STATUS: RecordingStatus = {
   framesCaptured: 0,
   framesDropped: 0,
   startedAtUnixMs: 0,
+  stopAtUnixMs: 0,
 };
