@@ -3,7 +3,7 @@
 import { RadarConnectionProvider } from "@/context/RadarConnectionProvider";
 import { ConnectionStatusIndicator } from "@/components/ConnectionStatusIndicator";
 import { RecorderPanel } from "@/components/RecorderPanel";
-import { LiveGraphPanel } from "@/components/LiveGraphPanel";
+import { LiveDspPanel } from "@/components/LiveDspPanel";
 import { InferencePanel } from "@/components/InferencePanel";
 
 export default function Home() {
@@ -24,7 +24,7 @@ export default function Home() {
 
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
           <div className="lg:col-span-2">
-            <LiveGraphPanel />
+            <LiveDspPanel />
           </div>
           <div className="flex flex-col gap-6">
             <RecorderPanel />

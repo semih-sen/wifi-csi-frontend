@@ -51,7 +51,7 @@ the library's automatic fallback only if you expect restrictive proxies.
 
 | Event | Payload shape | Casing | Cadence | Status |
 |---|---|---|---|---|
-| `ReceiveCsiData` | `{ timestampMs, rssi, subcarrierCount, amplitudes[] }` | camelCase | ~1–2 Hz (one per SlideStep) | **Live** (when ESP32 streams) |
+| `ReceiveDspFrame` | `{ seqNo, rx:[{ rxIndex, amplitude[64], dopplerMean[33] }] }` | camelCase | **10 Hz** (throttled) | **Live** (when both RX stream + pair) |
 | `RecordingState` | `{ isRecording, sessionId, label, framesCaptured, framesDropped, startedAtUnixMs }` | camelCase | On connect + every start/stop | **Live now** |
 | `ReceiveInference` | `{ predictedLabel, confidence, scores{label:number}, timestampMs }` | camelCase | Per window | **Pending (Phase 4)** — won't fire until the ONNX model + debounce are wired |
 | `ReceiveStatus` | `{ Status, Timestamp }` | **PascalCase** ⚠️ | On confirmed automation change | **Pending (Phase 4)** |
@@ -62,21 +62,24 @@ attributes, so it arrives **PascalCase** (`Status`, `Timestamp`) — inconsisten
 with every other event. Handle it as-is on the client, or raise it with the backend
 to normalize before Phase 4 lands. Don't let it silently break a typed mapping.
 
-### 2.3 `ReceiveCsiData` payload semantics
+### 2.3 `ReceiveDspFrame` payload semantics (V2 per-RX DSP)
 
-- `amplitudes` is **one filtered value per subcarrier** for the latest frame —
-  i.e. an amplitude-vs-subcarrier vector at a single instant, length
-  `subcarrierCount`.
-- Values are **baseline-subtracted and low-pass filtered**, so they **can be
-  negative**. Do not assume a non-negative y-axis.
-- This is emitted once per processing window slide, **not** at the full 100 Hz
-  ingest rate. At `SlideStep = 50` that is ~2 Hz; at `100` it is ~1 Hz. The live
-  graph is therefore comfortably renderable — you are not fighting a firehose.
-- `rssi` (dBm, negative) and `timestampMs` (Unix ms) accompany each frame.
+- `rx` always carries two entries, `rxIndex` 0 (RX0/primary) and 1 (RX1/secondary) —
+  the two synchronized receivers, never fused (fusion is a later backend phase).
+- `amplitude` is `|CSI|` per subcarrier (length 64), **raw magnitude → non-negative**.
+- `dopplerMean` is a **viz-only** aggregate: the mean STFT magnitude across subcarriers
+  for that RX's latest Doppler column (length 33 = one-sided DC…Nyquist). Empty (`[]`)
+  until the first STFT window fills (~0.6 s per RX). The model-facing per-subcarrier
+  Doppler stays server-side.
+- Throttled to **10 Hz** (not the full frame rate); loss-tolerant, so a dropped frame
+  is harmless. `seqNo` is the shared alignment key of the RX pair.
 
-Two reasonable visualizations from this payload:
-- **Spectrum view:** plot `amplitudes` vs subcarrier index, refreshed each event.
-- **Time view (waterfall/line):** pick one or a few subcarriers and append their
+The live panel renders, per RX: an amplitude heatmap (subcarrier × time) and a Doppler
+spectrogram (0 Hz centered — the symmetric magnitude mirrored about DC — × time). Empty
+room concentrates Doppler energy at the center bin; walking spreads it outward.
+
+Rendering pattern (unchanged discipline):
+- **Time view (waterfall/spectrogram):** append one column per event and append their
   values to a client-side rolling buffer over time.
 
 ### 2.4 Client → server methods (call with `connection.invoke`)
@@ -137,8 +140,9 @@ A minimal, sane layout:
 
 - **Connection/recorder context** — owns the singleton connection, exposes
   `connectionState`, `recordingStatus`, and `start(label)`/`stop()` actions.
-- **Live graph panel** — subscribes to `ReceiveCsiData`, owns a client-side rolling
-  buffer, renders the chart. Self-contained.
+- **Live DSP panel** — subscribes to `ReceiveDspFrame`, owns bounded per-RX ring
+  buffers, renders the amplitude heatmap + Doppler spectrogram for RX0 and RX1 side by
+  side (canvas + rAF). Also surfaces pairing health from `/health`. Self-contained.
 - **Recorder panel** — label input, start/stop button driven by `recordingStatus`,
   live `framesCaptured` counter, and a **drop warning** when `framesDropped > 0`.
 - **Inference panel** — subscribes to `ReceiveInference`/`ReceiveStatus`; renders a
@@ -159,12 +163,13 @@ on unmount) so panels compose cleanly.
   ref/buffer and let the chart read on its own `requestAnimationFrame` tick rather
   than re-rendering React state on every event. This pattern costs nothing now and
   saves you if the backend cadence increases.
-- **Negative values.** Auto-scale the y-axis or center it on zero; baseline
-  subtraction makes amplitudes swing both ways.
-- **Dev without hardware = no `ReceiveCsiData`.** With no ESP32 transmitting, the
-  graph stream is silent. Build a small mock emitter (a local interval pushing
-  synthetic frames in the same shape) behind a dev flag so you can develop the chart
-  without the full hardware loop running. Coordinate the exact shape from §2.2/§2.3.
+- **Color scale.** Amplitude and Doppler magnitude are both non-negative; the heatmap
+  auto-scales its color range to a slowly-decaying running max so contrast follows the
+  signal without a fixed ceiling.
+- **Dev without hardware = no `ReceiveDspFrame`.** With no ESP32 transmitting (or the
+  RX pair not aligning), the stream is silent. `NEXT_PUBLIC_MOCK_DSP=1` starts a local
+  emitter pushing synthetic `ReceiveDspFrame`s in the same shape so you can develop the
+  canvases without the full hardware loop. Coordinate the exact shape from §2.2/§2.3.
 
 ---
 
@@ -242,10 +247,9 @@ dependency; 3 needs the ESP32 loop (or the mock); 4 is gated on backend Phase 4.
 - [ ] `RecordingState` treated as the source of truth for recorder UI.
 - [ ] `framesDropped > 0` surfaced as a session-integrity warning.
 - [ ] `ReceiveStatus` parsed as **PascalCase**; all other events camelCase.
-- [ ] Graph y-axis tolerates negative (baseline-subtracted) amplitudes.
 - [ ] Client-side buffer is bounded (no unbounded growth on long sessions).
 - [ ] Render decoupled from event rate (buffer + rAF, not state-per-event).
-- [ ] Dev mock for `ReceiveCsiData` when no hardware is streaming.
+- [ ] Dev mock (`NEXT_PUBLIC_MOCK_DSP=1`) for `ReceiveDspFrame` when no hardware is streaming.
 - [ ] Connection state visible to the user (stale vs empty are different things).
 
 ---

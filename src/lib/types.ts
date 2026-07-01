@@ -5,18 +5,30 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire-contract version this client expects. Must match the backend's GetServerInfo. */
-export const CONTRACT_VERSION = "1.3";
+export const CONTRACT_VERSION = "1.4";
 
-/** `ReceiveCsiData` — one amplitude-vs-subcarrier vector per processing slide (~1–2 Hz). */
-export interface CsiFrame {
-  /** Unix epoch milliseconds. */
-  timestampMs: number;
-  /** Received signal strength, dBm (negative). */
-  rssi: number;
-  /** Length of `amplitudes`. */
-  subcarrierCount: number;
-  /** One filtered value per subcarrier. Baseline-subtracted → CAN BE NEGATIVE. */
-  amplitudes: number[];
+/** One RX's viz data inside a {@link DspFrame}. */
+export interface DspRx {
+  /** 0 = RX0 (primary), 1 = RX1 (secondary). */
+  rxIndex: number;
+  /** `|CSI|` per subcarrier (length `subcarriers`, 64). Raw magnitude → NON-NEGATIVE. */
+  amplitude: number[];
+  /**
+   * VIZ-ONLY mean STFT magnitude across subcarriers (length `dopplerBins`, 33 =
+   * one-sided DC…Nyquist). Empty until the first STFT window fills (~0.6 s per RX).
+   */
+  dopplerMean: number[];
+}
+
+/**
+ * `ReceiveDspFrame` — throttled (10 Hz) per-RX amplitude + aggregated Doppler tap off
+ * the backend DSP stage, for the live canvases. Replaces the V1 `ReceiveCsiData`.
+ */
+export interface DspFrame {
+  /** Shared sequence number of the aligned RX pair. */
+  seqNo: number;
+  /** Always two entries: rxIndex 0 (RX0) and 1 (RX1). */
+  rx: DspRx[];
 }
 
 /** `RecordingState` broadcast + `Start/Stop/GetRecordingStatus` return value. */
@@ -59,6 +71,12 @@ export interface ServerInfo {
   classes: string[];
   isCalibrating: boolean;
   baselineActive: boolean;
+  /** Subcarriers per RX in a DSP frame (viz canvas height). */
+  subcarriers: number;
+  /** Doppler magnitude bins per RX (`dopplerMean` length). */
+  dopplerBins: number;
+  /** Throttled cadence of `ReceiveDspFrame`, in Hz. */
+  dopplerCadenceHz: number;
 }
 
 /** `CalibrationState` — baseline (tare) progress, pushed on start/finish + on connect. */
@@ -73,7 +91,7 @@ export interface CalibrationState {
 
 /** SignalR event names, server → client. */
 export const HubEvent = {
-  CsiData: "ReceiveCsiData",
+  DspFrame: "ReceiveDspFrame",
   RecordingState: "RecordingState",
   Inference: "ReceiveInference",
   Status: "ReceiveStatus",

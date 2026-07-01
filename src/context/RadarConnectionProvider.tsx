@@ -24,19 +24,19 @@ import {
 } from "@/lib/types";
 import {
   parseCalibrationState,
-  parseCsiFrame,
+  parseDspFrame,
   parseInferenceResult,
   parseRecordingStatus,
   parseServerInfo,
   parseStatusEvent,
 } from "@/lib/validation";
-import { startMockCsiEmitter } from "@/lib/mockEmitter";
+import { startMockDspEmitter } from "@/lib/mockEmitter";
 
 type EventHandler = (payload: unknown) => void;
 
 /** Per-event boundary validators. A payload that fails is dropped (logged), never dispatched. */
 const VALIDATORS: Record<string, (p: unknown) => unknown | null> = {
-  [HubEvent.CsiData]: parseCsiFrame,
+  [HubEvent.DspFrame]: parseDspFrame,
   [HubEvent.Inference]: parseInferenceResult,
   [HubEvent.Status]: parseStatusEvent,
   [HubEvent.RecordingState]: parseRecordingStatus,
@@ -82,9 +82,29 @@ interface RadarContextValue {
 
 const RadarContext = createContext<RadarContextValue | null>(null);
 
+// Backend port the SignalR hub is served on (see Program.cs UseUrls).
+const HUB_PORT = 5000;
+
 function resolveHubUrl(): string {
-  const origin = process.env.NEXT_PUBLIC_HUB_URL ?? "http://localhost:5000";
-  return `${origin.replace(/\/$/, "")}/hubs/radar`;
+  // An explicit override always wins — use this only when the backend runs on a
+  // different host/port than the page was served from (e.g. a separate server box).
+  const override = process.env.NEXT_PUBLIC_HUB_URL?.trim();
+  if (override) {
+    return `${override.replace(/\/$/, "")}/hubs/radar`;
+  }
+
+  // Default: derive the backend origin from whatever host loaded this page. This
+  // makes one build work everywhere on the LAN — opening the UI from the laptop
+  // (localhost) talks to the laptop's backend; opening it from a phone at
+  // http://192.168.x.y talks to that same machine, not the phone itself. Hardcoding
+  // "localhost" here is exactly what breaks the graph/prediction on remote devices.
+  if (typeof window !== "undefined") {
+    const { protocol, hostname } = window.location;
+    return `${protocol}//${hostname}:${HUB_PORT}/hubs/radar`;
+  }
+
+  // SSR fallback only — the real connection is always established client-side.
+  return `http://localhost:${HUB_PORT}/hubs/radar`;
 }
 
 function toState(s: HubConnectionState): ConnectionState {
@@ -119,16 +139,16 @@ export function RadarConnectionProvider({
   // Safety timer: if a calibration never reports completion (e.g. no CSI frames are
   // arriving), reset the UI instead of hanging on "Calibrating…" forever.
   const calTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Wall-clock of the last REAL (backend) CSI frame — drives hasLiveData and the
+  // Wall-clock of the last REAL (backend) DSP frame — drives hasLiveData and the
   // "no data" guard on calibrate(). Mock frames intentionally don't count here.
-  const lastCsiAtRef = useRef(0);
+  const lastFrameAtRef = useRef(0);
   // StrictMode (dev) double-invokes effects; this guards against a second start.
   const startedRef = useRef(false);
   // Local event bus: bridges both real hub events and the mock emitter so panels
   // subscribe through one path regardless of source.
   const handlersRef = useRef<Map<string, Set<EventHandler>>>(new Map());
 
-  const mockActive = process.env.NEXT_PUBLIC_MOCK_CSI === "1";
+  const mockActive = process.env.NEXT_PUBLIC_MOCK_DSP === "1";
 
   // Validate at the boundary, then dispatch the typed payload. A payload that fails
   // validation is dropped here (logged once), so panels never see malformed data.
@@ -235,11 +255,11 @@ export function RadarConnectionProvider({
       setRecordingStatus(status);
       dispatch(HubEvent.RecordingState, status);
     });
-    // Stream + Phase-4 events are forwarded onto the local bus for panels. Real CSI
-    // frames also stamp lastCsiAtRef so we know live data is actually flowing.
-    connection.on(HubEvent.CsiData, (p) => {
-      lastCsiAtRef.current = Date.now();
-      dispatch(HubEvent.CsiData, p);
+    // Stream + Phase-4 events are forwarded onto the local bus for panels. Real DSP
+    // frames also stamp lastFrameAtRef so we know live data is actually flowing.
+    connection.on(HubEvent.DspFrame, (p) => {
+      lastFrameAtRef.current = Date.now();
+      dispatch(HubEvent.DspFrame, p);
     });
     connection.on(HubEvent.Inference, (p) => dispatch(HubEvent.Inference, p));
     connection.on(HubEvent.Status, (p) => dispatch(HubEvent.Status, p));
@@ -293,8 +313,8 @@ export function RadarConnectionProvider({
 
     let stopMock: (() => void) | undefined;
     if (mockActive) {
-      stopMock = startMockCsiEmitter((frame) =>
-        dispatch(HubEvent.CsiData, frame),
+      stopMock = startMockDspEmitter((frame) =>
+        dispatch(HubEvent.DspFrame, frame),
       );
     }
 
@@ -302,7 +322,7 @@ export function RadarConnectionProvider({
       stopMock?.();
       if (calTimeoutRef.current) clearTimeout(calTimeoutRef.current);
       connection.off(HubEvent.RecordingState);
-      connection.off(HubEvent.CsiData);
+      connection.off(HubEvent.DspFrame);
       connection.off(HubEvent.Inference);
       connection.off(HubEvent.Status);
       connection.off(HubEvent.Calibration);
@@ -315,10 +335,10 @@ export function RadarConnectionProvider({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Poll whether real CSI frames are still arriving (stale after ~4 s of silence).
+  // Poll whether real DSP frames are still arriving (stale after ~4 s of silence).
   useEffect(() => {
     const id = setInterval(() => {
-      setHasLiveData(Date.now() - lastCsiAtRef.current < 4000);
+      setHasLiveData(Date.now() - lastFrameAtRef.current < 4000);
     }, 1000);
     return () => clearInterval(id);
   }, []);
@@ -353,7 +373,7 @@ export function RadarConnectionProvider({
 
     // Fast fail: calibration averages live CSI frames. If none are arriving there is
     // nothing to average — don't spin, explain the real problem immediately.
-    if (Date.now() - lastCsiAtRef.current > 4000) {
+    if (Date.now() - lastFrameAtRef.current > 4000) {
       setCalibrationError(
         "No CSI data is reaching the server — start the sensor (ESP32) streaming to the broker before calibrating.",
       );

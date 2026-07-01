@@ -1,39 +1,53 @@
-import type { CsiFrame } from "./types";
+import type { DspFrame } from "./types";
 
 /**
- * Synthetic CSI source for developing the live graph without an ESP32 streaming
- * (README §6). Emits frames in the exact `ReceiveCsiData` shape at ~2 Hz.
+ * Synthetic per-RX DSP source for developing the live canvases without an ESP32
+ * streaming. Emits frames in the exact `ReceiveDspFrame` shape at the contract cadence
+ * (~10 Hz), two RX side by side.
  *
- * Signal model: a few standing-wave bumps across the subcarrier axis plus
- * slow drift and noise, with values swinging both sides of zero to mimic the
- * baseline-subtracted, low-pass-filtered amplitudes the backend produces.
+ * Signal model: amplitude is a few travelling standing-wave bumps across the 64
+ * subcarriers; the Doppler column keeps most energy in the DC (zero) bin — like a
+ * static room — with a slow, small spread into low non-zero bins so the spectrogram
+ * looks alive. RX1 lags RX0 slightly so the two panels are visibly distinct.
  */
-export function startMockCsiEmitter(
-  emit: (frame: CsiFrame) => void,
-  opts: { subcarriers?: number; intervalMs?: number } = {},
+export function startMockDspEmitter(
+  emit: (frame: DspFrame) => void,
+  opts: { subcarriers?: number; dopplerBins?: number; intervalMs?: number } = {},
 ): () => void {
-  const subcarrierCount = opts.subcarriers ?? 52;
-  const intervalMs = opts.intervalMs ?? 500;
+  const subcarriers = opts.subcarriers ?? 64;
+  const dopplerBins = opts.dopplerBins ?? 33;
+  const intervalMs = opts.intervalMs ?? 100; // 10 Hz
   let t = 0;
+  let seq = 0;
+
+  const buildRx = (rxIndex: number, phase: number): DspFrame["rx"][number] => {
+    const amplitude = new Array<number>(subcarriers);
+    for (let k = 0; k < subcarriers; k++) {
+      const x = k / subcarriers;
+      const envelope =
+        18 +
+        Math.sin(Math.PI * x) * 8 +
+        Math.sin(2 * Math.PI * (x * 3 + t * 0.15 + phase)) * 4;
+      const noise = (Math.random() - 0.5) * 1.2;
+      amplitude[k] = Math.max(0, envelope + noise); // |CSI| ≥ 0
+    }
+
+    // Doppler: strong DC (bin 0) + a small, slowly-breathing low-frequency spread.
+    const spread = 1.5 + Math.sin(t * 0.5 + phase) * 1.0; // "activity" breathing
+    const dopplerMean = new Array<number>(dopplerBins);
+    for (let b = 0; b < dopplerBins; b++) {
+      const dc = b === 0 ? 30 : 0;
+      const tail = 12 * Math.exp(-b / Math.max(0.5, spread));
+      dopplerMean[b] = dc + tail + Math.random() * 0.4;
+    }
+
+    return { rxIndex, amplitude, dopplerMean };
+  };
 
   const id = setInterval(() => {
     t += intervalMs / 1000;
-    const amplitudes = new Array<number>(subcarrierCount);
-    for (let k = 0; k < subcarrierCount; k++) {
-      const x = k / subcarrierCount;
-      const envelope =
-        Math.sin(Math.PI * x) * 6 + // gentle band-shape
-        Math.sin(2 * Math.PI * (x * 3 + t * 0.15)) * 4; // travelling ripple
-      const motion = Math.sin(t * 1.3 + k * 0.2) * 2; // "activity" wobble
-      const noise = (Math.random() - 0.5) * 1.5;
-      amplitudes[k] = envelope * Math.exp(-2 * Math.abs(x - 0.5)) + motion + noise;
-    }
-    emit({
-      timestampMs: Date.now(),
-      rssi: -55 + Math.round((Math.random() - 0.5) * 6),
-      subcarrierCount,
-      amplitudes,
-    });
+    seq += 1;
+    emit({ seqNo: seq, rx: [buildRx(0, 0), buildRx(1, 0.6)] });
   }, intervalMs);
 
   return () => clearInterval(id);

@@ -8,7 +8,8 @@
 
 import type {
   CalibrationState,
-  CsiFrame,
+  DspFrame,
+  DspRx,
   InferenceResult,
   RecordingStatus,
   ServerInfo,
@@ -31,16 +32,30 @@ function isStrArray(v: unknown): v is string[] {
   return Array.isArray(v) && v.every(isStr);
 }
 
-export function parseCsiFrame(p: unknown): CsiFrame | null {
+function parseDspRx(p: unknown): DspRx | null {
   if (!isObject(p)) return null;
-  if (!isNum(p.timestampMs) || !isNum(p.rssi) || !isNum(p.subcarrierCount)) return null;
-  if (!isNumArray(p.amplitudes)) return null;
+  if (!isNum(p.rxIndex)) return null;
+  // amplitude must be present + non-empty; dopplerMean may be [] until the STFT fills.
+  if (!isNumArray(p.amplitude) || p.amplitude.length === 0) return null;
+  if (!isNumArray(p.dopplerMean)) return null;
   return {
-    timestampMs: p.timestampMs,
-    rssi: p.rssi,
-    subcarrierCount: p.subcarrierCount,
-    amplitudes: p.amplitudes,
+    rxIndex: p.rxIndex,
+    amplitude: p.amplitude,
+    dopplerMean: p.dopplerMean,
   };
+}
+
+export function parseDspFrame(p: unknown): DspFrame | null {
+  if (!isObject(p)) return null;
+  if (!isNum(p.seqNo)) return null;
+  if (!Array.isArray(p.rx) || p.rx.length === 0) return null;
+  const rx: DspRx[] = [];
+  for (const entry of p.rx) {
+    const parsed = parseDspRx(entry);
+    if (!parsed) return null;
+    rx.push(parsed);
+  }
+  return { seqNo: p.seqNo, rx };
 }
 
 export function parseInferenceResult(p: unknown): InferenceResult | null {
@@ -117,6 +132,11 @@ export function parseServerInfo(p: unknown): ServerInfo | null {
     classes: p.classes,
     isCalibrating: p.isCalibrating,
     baselineActive: p.baselineActive,
+    // Viz metadata is additive in contract 1.4; fall back to the pinned defaults so a
+    // slightly older backend still renders (canvases just size from 64/33/10).
+    subcarriers: isNum(p.subcarriers) ? p.subcarriers : 64,
+    dopplerBins: isNum(p.dopplerBins) ? p.dopplerBins : 33,
+    dopplerCadenceHz: isNum(p.dopplerCadenceHz) ? p.dopplerCadenceHz : 10,
   };
 }
 

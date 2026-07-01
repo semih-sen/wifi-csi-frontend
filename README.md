@@ -21,7 +21,7 @@ npm run dev
 | Env var | Meaning |
 |---|---|
 | `NEXT_PUBLIC_HUB_URL` | Backend origin; hub is at `{origin}/hubs/radar` |
-| `NEXT_PUBLIC_MOCK_CSI` | `1` → local synthetic CSI emitter (develop the graph with no ESP32) |
+| `NEXT_PUBLIC_MOCK_DSP` | `1` → local synthetic per-RX DSP emitter (develop the canvases with no ESP32) |
 
 ## Architecture
 
