@@ -10,6 +10,10 @@ import {
 import { useRadar } from "@/context/RadarConnectionProvider";
 import { type DspFrame, type DspRx, HubEvent } from "@/lib/types";
 import { HeatmapCanvas, type HeatmapHandle } from "@/components/HeatmapCanvas";
+import {
+  InstantAmplitudeCanvas,
+  type InstantAmplitudeHandle,
+} from "@/components/InstantAmplitudeCanvas";
 
 // Bounded client-side history: 256 columns ≈ 25 s at the 10 Hz DSP cadence.
 const MAX_COLS = 256;
@@ -94,7 +98,13 @@ const RxViz = forwardRef<RxVizHandle, RxVizProps>(function RxViz(
   ref,
 ) {
   const ampRef = useRef<HeatmapHandle | null>(null);
+  const instantRef = useRef<InstantAmplitudeHandle | null>(null);
   const dopRef = useRef<HeatmapHandle | null>(null);
+  // Per-panel amplitude render: "heatmap" (time-scroll) or "instant" (latest spectrum).
+  // Both are renders of the SAME amplitude[64]; this only picks which one is drawn.
+  const [ampView, setAmpView] = useState<"heatmap" | "instant">("heatmap");
+  // Display-only EMA on the instant trace (off by default — raw is the honest view).
+  const [smooth, setSmooth] = useState(false);
   // A real magnitude spectrum is symmetric, so we mirror the one-sided bins about DC
   // for the classic centered-Doppler look: DC (bin 0) at the middle row.
   const dopplerRows = 2 * dopplerBins - 1;
@@ -103,7 +113,10 @@ const RxViz = forwardRef<RxVizHandle, RxVizProps>(function RxViz(
     ref,
     () => ({
       push: (rx: DspRx) => {
+        // Feed both amplitude renders the same array; only the mounted one has a
+        // non-null ref, so this costs nothing for the hidden view.
         ampRef.current?.push(rx.amplitude);
+        instantRef.current?.push(rx.amplitude);
         if (rx.dopplerMean.length === dopplerBins) {
           const mirrored = new Float32Array(dopplerRows);
           const center = dopplerBins - 1;
@@ -133,11 +146,37 @@ const RxViz = forwardRef<RxVizHandle, RxVizProps>(function RxViz(
       </div>
 
       <div>
-        <p className="mb-1 text-[11px] text-slate-500">
-          Amplitude — subcarrier (↓) × time (→)
-        </p>
+        <div className="mb-1 flex items-center justify-between gap-2">
+          <p className="text-[11px] text-slate-500">
+            {ampView === "heatmap"
+              ? "Amplitude — subcarrier (↓) × time (→)"
+              : "Amplitude — subcarrier (→) × |CSI| (↑), latest frame"}
+          </p>
+          <div className="flex items-center gap-2">
+            {ampView === "instant" && (
+              <label className="flex items-center gap-1 text-[11px] text-slate-400">
+                <input
+                  type="checkbox"
+                  className="h-3 w-3 accent-sky-400"
+                  checked={smooth}
+                  onChange={(e) => setSmooth(e.target.checked)}
+                />
+                smooth
+              </label>
+            )}
+            <AmpViewToggle view={ampView} onChange={setAmpView} />
+          </div>
+        </div>
         <div className="h-40 w-full overflow-hidden rounded-md bg-slate-950">
-          <HeatmapCanvas ref={ampRef} rows={subcarriers} maxCols={MAX_COLS} />
+          {ampView === "heatmap" ? (
+            <HeatmapCanvas ref={ampRef} rows={subcarriers} maxCols={MAX_COLS} />
+          ) : (
+            <InstantAmplitudeCanvas
+              ref={instantRef}
+              bins={subcarriers}
+              smooth={smooth}
+            />
+          )}
         </div>
       </div>
 
@@ -226,6 +265,39 @@ export function LiveDspPanel() {
         />
       </div>
     </section>
+  );
+}
+
+// Compact segmented toggle: Heatmap (time-scroll) ↔ Instant (latest spectrum).
+function AmpViewToggle({
+  view,
+  onChange,
+}: {
+  view: "heatmap" | "instant";
+  onChange: (v: "heatmap" | "instant") => void;
+}) {
+  const opts: Array<{ key: "heatmap" | "instant"; label: string }> = [
+    { key: "heatmap", label: "Heatmap" },
+    { key: "instant", label: "Instant" },
+  ];
+  return (
+    <div className="flex overflow-hidden rounded-md border border-white/10 text-[11px]">
+      {opts.map((o) => (
+        <button
+          key={o.key}
+          type="button"
+          onClick={() => onChange(o.key)}
+          aria-pressed={view === o.key}
+          className={`px-2 py-0.5 transition-colors ${
+            view === o.key
+              ? "bg-sky-500/20 text-sky-200"
+              : "text-slate-400 hover:bg-white/5"
+          }`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
   );
 }
 
