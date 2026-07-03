@@ -16,6 +16,7 @@ import {
 } from "@microsoft/signalr";
 import {
   type ConnectionState,
+  type RecordingKind,
   type RecordingStatus,
   type ServerInfo,
   CONTRACT_VERSION,
@@ -55,6 +56,7 @@ interface RadarContextValue {
   /** True once we've heard back from the server at least once. */
   recordingStatus: RecordingStatus | null;
   startRecording: (
+    kind: RecordingKind,
     label: string,
     subject?: string,
     durationMs?: number,
@@ -344,14 +346,19 @@ export function RadarConnectionProvider({
   }, []);
 
   const startRecording = useCallback(
-    async (label: string, subject = "", durationMs = 0) => {
+    async (
+      kind: RecordingKind,
+      label: string,
+      subject = "",
+      durationMs = 0,
+    ) => {
       const c = connectionRef.current;
       if (!c || c.state !== HubConnectionState.Connected) {
         throw new Error("Not connected");
       }
       // We rely on the broadcast RecordingState for UI; return value is ignored.
-      // All three args are sent explicitly — SignalR binds positionally.
-      await c.invoke(HubMethod.StartRecording, label, subject, durationMs);
+      // All four args are sent explicitly — SignalR binds positionally.
+      await c.invoke(HubMethod.StartRecording, kind, label, subject, durationMs);
     },
     [],
   );

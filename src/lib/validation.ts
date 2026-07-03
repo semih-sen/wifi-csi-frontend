@@ -97,6 +97,8 @@ export function parseRecordingStatus(p: unknown): RecordingStatus | null {
   return {
     isRecording: p.isRecording,
     sessionId: p.sessionId,
+    // Additive in contract 1.5; tolerate an older backend that omits it.
+    kind: isStr(p.kind) ? p.kind : "",
     label: p.label,
     subject: p.subject,
     framesCaptured: p.framesCaptured,

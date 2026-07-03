@@ -52,7 +52,7 @@ the library's automatic fallback only if you expect restrictive proxies.
 | Event | Payload shape | Casing | Cadence | Status |
 |---|---|---|---|---|
 | `ReceiveDspFrame` | `{ seqNo, rx:[{ rxIndex, amplitude[64], dopplerMean[33] }] }` | camelCase | **10 Hz** (throttled) | **Live** (when both RX stream + pair) |
-| `RecordingState` | `{ isRecording, sessionId, label, framesCaptured, framesDropped, startedAtUnixMs }` | camelCase | On connect + every start/stop | **Live now** |
+| `RecordingState` | `{ isRecording, sessionId, kind, label, subject, framesCaptured, framesDropped, startedAtUnixMs, stopAtUnixMs }` | camelCase | On connect + every start/stop | **Live now** |
 | `ReceiveInference` | `{ predictedLabel, confidence, scores{label:number}, timestampMs }` | camelCase | Per window | **Pending (Phase 4)** — won't fire until the ONNX model + debounce are wired |
 | `ReceiveStatus` | `{ Status, Timestamp }` | **PascalCase** ⚠️ | On confirmed automation change | **Pending (Phase 4)** |
 
@@ -86,14 +86,22 @@ Rendering pattern (unchanged discipline):
 
 | Method | Args | Returns |
 |---|---|---|
-| `StartRecording` | `label: string` (blank → `"unlabeled"`) | `RecordingStatus` |
+| `StartRecording` | `kind: "activity"\|"identity", label: string, subject: string, durationMs: int` (0 = manual) | `RecordingStatus` |
 | `StopRecording` | — | `RecordingStatus` |
 | `GetRecordingStatus` | — | `RecordingStatus` |
 
-`Start`/`Stop` both return the resulting `RecordingStatus` to the caller **and**
-broadcast it to all clients via `RecordingState`. So you can either use the invoke
-return value or rely on the broadcast — prefer treating `RecordingState` as the
-single source of truth so multiple open tabs/clients stay consistent.
+**SignalR binds args positionally — send all four `StartRecording` args explicitly** (it
+does not fill C# defaults). The server **validates**: `kind` must be `activity` or
+`identity`, and an `identity` session requires a non-blank `subject` (gait data with no
+person is useless; the activity is forced to `walking`). A rejected request comes back as
+the idle `RecordingStatus` (`isRecording:false`) — nothing starts.
+
+`Start`/`Stop` both return the resulting `RecordingStatus` to the caller **and** broadcast
+it to all clients via `RecordingState`. So you can either use the invoke return value or
+rely on the broadcast — prefer treating `RecordingState` as the single source of truth so
+multiple open tabs/clients stay consistent. `RecordingStatus` now carries `kind` (contract
+1.5): `{ isRecording, sessionId, kind, label, subject, framesCaptured, framesDropped,
+startedAtUnixMs, stopAtUnixMs }`.
 
 ---
 
@@ -175,27 +183,37 @@ on unmount) so panels compose cleanly.
 
 ## 7. Recording UX flow
 
-The interaction loop is deliberately simple because the backend owns the hard parts:
+The recorder captures **raw aligned dual-RX I/Q** (`.csibin` v3) server-side; the client is
+control + status only. The panel (`RecorderPanel`) has an **Activity | Identity** mode toggle
+because the two produce different datasets:
 
-1. User types a **label** (the activity class: e.g. `Walking`, `EmptyRoom`,
-   `LyingOnCouch`) and presses **Start**.
-2. Client `invoke("StartRecording", label)`; UI flips to a recording state driven by
-   the returned/broadcast `RecordingStatus`.
-3. While recording, show **live `framesCaptured`** (and elapsed time from
-   `startedAtUnixMs`) so the user has feedback that data is flowing.
-4. **Surface `framesDropped` prominently if non-zero** — a dropped frame flags the
-   session incomplete in its server-side manifest, so the user should know to redo
-   the take. This is a first-class signal, not a footnote.
+- **Activity** — a class selector (`empty` / `standing` / `walking` / `sitting`) sets the
+  label; subject is optional. Sends `kind="activity"`.
+- **Identity** — gait recognition, so the activity is **locked to `walking`** and a
+  **subject (person) is required** (Start stays disabled until it's non-empty). Sends
+  `kind="identity", label="walking", subject=<person>`.
+
+The loop:
+
+1. Pick mode + class/subject (+ optional auto-stop duration) and press **Start**.
+2. Client `invoke("StartRecording", kind, label, subject, durationMs)`; UI flips to a
+   recording state driven by the returned/broadcast `RecordingStatus`.
+3. While recording, show **live `framesCaptured`**, `kind`, `label`, `subject`, and elapsed
+   time (from `startedAtUnixMs`) so the user has feedback that data is flowing.
+4. **Surface `framesDropped` prominently if non-zero** — a dropped frame (backpressure / RX
+   dropout) makes the session **not ML-grade** (flagged incomplete in its manifest), so the
+   user should re-record. First-class signal, not a footnote.
 5. **Stop** → `invoke("StopRecording")`; the server finalizes the file + manifest.
 
 Guardrails:
+- **Disable Start unless `hasLiveData`** (CSI frames actually flowing) — recording nothing
+  is worse than not recording; show the "no CSI reaching the server" message otherwise.
 - Disable Start while `isRecording` is true (and Stop while idle) — drive both off
   `RecordingState`, never off optimistic local state alone.
-- Because state is server-authoritative and broadcast to all clients, two open tabs
-  stay in sync for free if you treat `RecordingState` as the source of truth.
-- Consider a fixed label set (dropdown) over free text to keep class names
-  consistent for the training set — the model team will thank you. The backend
-  sanitizes labels for filenames regardless, so free text is safe, just messier.
+- Because state is server-authoritative and broadcast to all clients, two open tabs stay in
+  sync for free if you treat `RecordingState` as the source of truth.
+- The class set is a fixed dropdown (consistent training labels); the backend sanitizes
+  labels for filenames regardless.
 
 ---
 

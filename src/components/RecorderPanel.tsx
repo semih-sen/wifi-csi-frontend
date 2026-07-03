@@ -2,17 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useRadar } from "@/context/RadarConnectionProvider";
+import type { RecordingKind } from "@/lib/types";
 
-// Fixed activity classes keep the training set consistent (README §7).
-// Free text is still allowed via the "Custom…" option.
-const LABEL_PRESETS = [
-  "EmptyRoom",
-  "Walking",
-  "Standing",
-  "Sitting",
-  "LyingOnCouch",
-  "Falling",
-];
+// Activity mode: the pinned activity-model classes (empty/standing/walking/sitting).
+// Kept lowercase so the recorded label matches the class vocabulary the model trains on.
+const ACTIVITY_CLASSES = ["empty", "standing", "walking", "sitting"] as const;
+
+// Identity mode records gait, so the activity is always "walking" — gait is the only
+// identity signal; a sitting/standing person can't be identified.
+const IDENTITY_LABEL = "walking";
 
 function useElapsed(startedAtUnixMs: number, active: boolean): string {
   const [now, setNow] = useState(() => Date.now());
@@ -59,8 +57,8 @@ export function RecorderPanel() {
     hasLiveData,
   } = useRadar();
 
-  const [preset, setPreset] = useState(LABEL_PRESETS[0]);
-  const [custom, setCustom] = useState("");
+  const [mode, setMode] = useState<RecordingKind>("activity");
+  const [activityClass, setActivityClass] = useState<string>(ACTIVITY_CLASSES[1]);
   const [subject, setSubject] = useState("");
   const [durationSec, setDurationSec] = useState("");
   const [busy, setBusy] = useState(false);
@@ -72,18 +70,31 @@ export function RecorderPanel() {
   const elapsed = useElapsed(recordingStatus?.startedAtUnixMs ?? 0, isRecording);
   const remaining = useCountdown(recordingStatus?.stopAtUnixMs ?? 0, isRecording);
 
-  const label = preset === "__custom__" ? custom.trim() : preset;
+  // Identity locks the activity to "walking"; activity mode uses the class selector.
+  const label = mode === "identity" ? IDENTITY_LABEL : activityClass;
+  const trimmedSubject = subject.trim();
+  const subjectRequired = mode === "identity";
   const dropped = recordingStatus?.framesDropped ?? 0;
 
   // Parse the duration field: blank/0/invalid → manual (open-ended).
   const durSec = parseInt(durationSec, 10);
   const durationMs = Number.isFinite(durSec) && durSec > 0 ? durSec * 1000 : 0;
 
+  // Recording nothing is worse than not recording: block Start unless CSI is flowing.
+  const canStart =
+    connected &&
+    !isRecording &&
+    !busy &&
+    hasLiveData &&
+    !calibration.isCalibrating &&
+    !!label &&
+    (!subjectRequired || trimmedSubject.length > 0);
+
   async function handleStart() {
     setError(null);
     setBusy(true);
     try {
-      await startRecording(label || "unlabeled", subject.trim(), durationMs);
+      await startRecording(mode, label, trimmedSubject, durationMs);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start");
     } finally {
@@ -174,45 +185,79 @@ export function RecorderPanel() {
         )}
       </div>
 
-      {/* Label selection */}
+      {/* Mode toggle — activity dataset vs identity (gait) dataset */}
       <div className="flex flex-col gap-2">
-        <label className="text-xs text-slate-400">Activity label</label>
-        <select
-          value={preset}
-          disabled={isRecording}
-          onChange={(e) => setPreset(e.target.value)}
-          className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50"
-        >
-          {LABEL_PRESETS.map((l) => (
-            <option key={l} value={l}>
-              {l}
-            </option>
+        <label className="text-xs text-slate-400">Recording mode</label>
+        <div className="grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-slate-800/60 p-1">
+          {(["activity", "identity"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              disabled={isRecording}
+              onClick={() => setMode(m)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium capitalize transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                mode === m
+                  ? "bg-sky-500/20 text-sky-200"
+                  : "text-slate-400 hover:bg-slate-700/60"
+              }`}
+            >
+              {m}
+            </button>
           ))}
-          <option value="__custom__">Custom…</option>
-        </select>
-        {preset === "__custom__" && (
-          <input
-            value={custom}
-            disabled={isRecording}
-            onChange={(e) => setCustom(e.target.value)}
-            placeholder="Custom label"
-            className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50"
-          />
-        )}
+        </div>
+        <p className="text-xs text-slate-500">
+          {mode === "activity"
+            ? "Empty / standing / walking / sitting — the always-on activity model."
+            : "Gait identity — activity is locked to walking; a subject (person) is required."}
+        </p>
       </div>
 
-      {/* Subject — who performed the activity (enables person/gait recognition). */}
+      {/* Activity class (activity mode only) */}
+      {mode === "activity" && (
+        <div className="flex flex-col gap-2">
+          <label className="text-xs text-slate-400">Activity class</label>
+          <select
+            value={activityClass}
+            disabled={isRecording}
+            onChange={(e) => setActivityClass(e.target.value)}
+            className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm capitalize text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50"
+          >
+            {ACTIVITY_CLASSES.map((c) => (
+              <option key={c} value={c} className="capitalize">
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {/* Subject — optional for activity, REQUIRED for identity */}
       <div className="flex flex-col gap-2">
         <label className="text-xs text-slate-400">
-          Subject <span className="text-slate-600">(who — optional)</span>
+          Subject{" "}
+          {subjectRequired ? (
+            <span className="text-rose-400">(person — required)</span>
+          ) : (
+            <span className="text-slate-600">(who — optional)</span>
+          )}
         </label>
         <input
           value={subject}
           disabled={isRecording}
           onChange={(e) => setSubject(e.target.value)}
           placeholder="e.g. Alice"
-          className="rounded-lg border border-white/10 bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50"
+          className={`rounded-lg border bg-slate-800 px-3 py-2 text-sm text-slate-100 outline-none focus:border-sky-500 disabled:opacity-50 ${
+            subjectRequired && trimmedSubject.length === 0
+              ? "border-rose-500/40"
+              : "border-white/10"
+          }`}
         />
+        {mode === "identity" && (
+          <p className="text-xs text-slate-500">
+            Recording as{" "}
+            <span className="text-slate-300">walking</span> gait for this person.
+          </p>
+        )}
       </div>
 
       {/* Auto-stop duration — enforced server-side so it stops even if this tab is gone. */}
@@ -267,8 +312,9 @@ export function RecorderPanel() {
 
       {dropped > 0 && (
         <div className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
-          ⚠️ {dropped} frame{dropped === 1 ? "" : "s"} dropped — this session is
-          flagged incomplete in its manifest. Consider redoing the take.
+          ⚠️ {dropped} frame{dropped === 1 ? "" : "s"} dropped — this session is{" "}
+          <strong>not ML-grade</strong> (backpressure / RX dropout during capture).
+          Re-record the take.
         </div>
       )}
 
@@ -276,9 +322,7 @@ export function RecorderPanel() {
       <div className="flex gap-3">
         <button
           onClick={handleStart}
-          disabled={
-            !connected || isRecording || busy || !label || calibration.isCalibrating
-          }
+          disabled={!canStart}
           className="flex-1 rounded-lg bg-sky-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-sky-500 disabled:cursor-not-allowed disabled:opacity-40"
         >
           Start
@@ -297,10 +341,28 @@ export function RecorderPanel() {
           Controls disabled until the hub connection is live.
         </p>
       )}
+      {connected && !hasLiveData && !isRecording && (
+        <p className="text-xs text-amber-300/80">
+          No CSI is reaching the server — start the sensor (ESP32) streaming before
+          recording. Recording nothing is worse than not recording.
+        </p>
+      )}
+      {connected &&
+        hasLiveData &&
+        subjectRequired &&
+        trimmedSubject.length === 0 &&
+        !isRecording && (
+          <p className="text-xs text-amber-300/80">
+            Identity recording needs a subject (person) — data with no person label is
+            useless.
+          </p>
+        )}
       {error && <p className="text-xs text-rose-300">{error}</p>}
       {recordingStatus && isRecording && (
         <p className="text-xs text-slate-500">
-          Session #{recordingStatus.sessionId} · “{recordingStatus.label}”
+          Session #{recordingStatus.sessionId} ·{" "}
+          <span className="uppercase">{recordingStatus.kind || mode}</span> · “
+          {recordingStatus.label}”
           {recordingStatus.subject && ` · ${recordingStatus.subject}`}
         </p>
       )}

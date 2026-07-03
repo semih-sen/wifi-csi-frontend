@@ -5,7 +5,10 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire-contract version this client expects. Must match the backend's GetServerInfo. */
-export const CONTRACT_VERSION = "1.4";
+export const CONTRACT_VERSION = "1.5";
+
+/** What a recording is for. Mirrors the backend `RecordingKind` wire tokens. */
+export type RecordingKind = "activity" | "identity";
 
 /** One RX's viz data inside a {@link DspFrame}. */
 export interface DspRx {
@@ -35,6 +38,8 @@ export interface DspFrame {
 export interface RecordingStatus {
   isRecording: boolean;
   sessionId: number;
+  /** What the session is for: "activity" | "identity" (empty when idle). */
+  kind: string;
   label: string;
   /** Who performed the activity (e.g. the person walking). Empty when N/A. */
   subject: string;
@@ -116,6 +121,7 @@ export type ConnectionState =
 export const IDLE_STATUS: RecordingStatus = {
   isRecording: false,
   sessionId: 0,
+  kind: "",
   label: "",
   subject: "",
   framesCaptured: 0,
