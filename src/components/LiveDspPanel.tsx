@@ -14,6 +14,10 @@ import {
   InstantAmplitudeCanvas,
   type InstantAmplitudeHandle,
 } from "@/components/InstantAmplitudeCanvas";
+import {
+  InstantPhaseCanvas,
+  type InstantPhaseHandle,
+} from "@/components/InstantPhaseCanvas";
 
 // Bounded client-side history: 256 columns ≈ 25 s at the 10 Hz DSP cadence.
 const MAX_COLS = 256;
@@ -99,6 +103,7 @@ const RxViz = forwardRef<RxVizHandle, RxVizProps>(function RxViz(
 ) {
   const ampRef = useRef<HeatmapHandle | null>(null);
   const instantRef = useRef<InstantAmplitudeHandle | null>(null);
+  const phaseRef = useRef<InstantPhaseHandle | null>(null);
   const dopRef = useRef<HeatmapHandle | null>(null);
   // Per-panel amplitude render: "heatmap" (time-scroll) or "instant" (latest spectrum).
   // Both are renders of the SAME amplitude[64]; this only picks which one is drawn.
@@ -117,6 +122,8 @@ const RxViz = forwardRef<RxVizHandle, RxVizProps>(function RxViz(
         // non-null ref, so this costs nothing for the hidden view.
         ampRef.current?.push(rx.amplitude);
         instantRef.current?.push(rx.amplitude);
+        // Sanitized phase (viz-only, contract 1.6). Empty on a pre-1.6 backend → no-op.
+        phaseRef.current?.push(rx.phase);
         if (rx.dopplerMean.length === dopplerBins) {
           const mirrored = new Float32Array(dopplerRows);
           const center = dopplerBins - 1;
@@ -184,8 +191,18 @@ const RxViz = forwardRef<RxVizHandle, RxVizProps>(function RxViz(
         <p className="mb-1 text-[11px] text-slate-500">
           Doppler — 0&nbsp;Hz centered (↕) × time (→)
         </p>
+        {/* Doppler — daha fazla dikey bütçe */}
+<div className="h-64 w-full overflow-hidden rounded-md bg-slate-950">
+  <HeatmapCanvas ref={dopRef} rows={dopplerRows} maxCols={MAX_COLS} gamma={0.45} />
+</div>
+      </div>
+
+      <div>
+        <p className="mb-1 text-[11px] text-slate-500">
+          Phase — subcarrier (→) × sanitized rad (↕, 0-centered), latest frame
+        </p>
         <div className="h-40 w-full overflow-hidden rounded-md bg-slate-950">
-          <HeatmapCanvas ref={dopRef} rows={dopplerRows} maxCols={MAX_COLS} />
+          <InstantPhaseCanvas ref={phaseRef} bins={subcarriers} />
         </div>
       </div>
     </div>

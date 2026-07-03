@@ -51,7 +51,7 @@ the library's automatic fallback only if you expect restrictive proxies.
 
 | Event | Payload shape | Casing | Cadence | Status |
 |---|---|---|---|---|
-| `ReceiveDspFrame` | `{ seqNo, rx:[{ rxIndex, amplitude[64], dopplerMean[33] }] }` | camelCase | **10 Hz** (throttled) | **Live** (when both RX stream + pair) |
+| `ReceiveDspFrame` | `{ seqNo, rx:[{ rxIndex, amplitude[64], phase[64], dopplerMean[33] }] }` | camelCase | **10 Hz** (throttled) | **Live** (when both RX stream + pair) |
 | `RecordingState` | `{ isRecording, sessionId, kind, label, subject, framesCaptured, framesDropped, startedAtUnixMs, stopAtUnixMs }` | camelCase | On connect + every start/stop | **Live now** |
 | `ReceiveInference` | `{ predictedLabel, confidence, scores{label:number}, timestampMs }` | camelCase | Per window | **Pending (Phase 4)** — won't fire until the ONNX model + debounce are wired |
 | `ReceiveStatus` | `{ Status, Timestamp }` | **PascalCase** ⚠️ | On confirmed automation change | **Pending (Phase 4)** |
@@ -67,6 +67,9 @@ to normalize before Phase 4 lands. Don't let it silently break a typed mapping.
 - `rx` always carries two entries, `rxIndex` 0 (RX0/primary) and 1 (RX1/secondary) —
   the two synchronized receivers, never fused (fusion is a later backend phase).
 - `amplitude` is `|CSI|` per subcarrier (length 64), **raw magnitude → non-negative**.
+- `phase` (contract 1.6) is a **viz-only** sanitized phase per subcarrier (length 64):
+  unwrap + linear-detrend → **relative, signed, near-zero**. Empty (`[]`) on a pre-1.6
+  backend → the phase panel just renders blank. Not model-facing.
 - `dopplerMean` is a **viz-only** aggregate: the mean STFT magnitude across subcarriers
   for that RX's latest Doppler column (length 33 = one-sided DC…Nyquist). Empty (`[]`)
   until the first STFT window fills (~0.6 s per RX). The model-facing per-subcarrier

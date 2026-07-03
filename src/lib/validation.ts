@@ -42,6 +42,8 @@ function parseDspRx(p: unknown): DspRx | null {
     rxIndex: p.rxIndex,
     amplitude: p.amplitude,
     dopplerMean: p.dopplerMean,
+    // Additive in contract 1.6; tolerate an older backend that omits it.
+    phase: isNumArray(p.phase) ? p.phase : [],
   };
 }
 

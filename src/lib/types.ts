@@ -5,7 +5,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** Wire-contract version this client expects. Must match the backend's GetServerInfo. */
-export const CONTRACT_VERSION = "1.5";
+export const CONTRACT_VERSION = "1.6";
 
 /** What a recording is for. Mirrors the backend `RecordingKind` wire tokens. */
 export type RecordingKind = "activity" | "identity";
@@ -16,6 +16,11 @@ export interface DspRx {
   rxIndex: number;
   /** `|CSI|` per subcarrier (length `subcarriers`, 64). Raw magnitude → NON-NEGATIVE. */
   amplitude: number[];
+  /**
+   * VIZ-ONLY sanitized phase per subcarrier (length `subcarriers`, 64). Unwrap+detrend
+   * output → RELATIVE, SIGNED, near-zero. Empty ([]) when the backend predates contract 1.6.
+   */
+  phase: number[];
   /**
    * VIZ-ONLY mean STFT magnitude across subcarriers (length `dopplerBins`, 33 =
    * one-sided DC…Nyquist). Empty until the first STFT window fills (~0.6 s per RX).

@@ -20,20 +20,30 @@ export function startMockDspEmitter(
   let t = 0;
   let seq = 0;
 
-  const buildRx = (rxIndex: number, phase: number): DspFrame["rx"][number] => {
+  const buildRx = (rxIndex: number, rxPhase: number): DspFrame["rx"][number] => {
     const amplitude = new Array<number>(subcarriers);
     for (let k = 0; k < subcarriers; k++) {
       const x = k / subcarriers;
       const envelope =
         18 +
         Math.sin(Math.PI * x) * 8 +
-        Math.sin(2 * Math.PI * (x * 3 + t * 0.15 + phase)) * 4;
+        Math.sin(2 * Math.PI * (x * 3 + t * 0.15 + rxPhase)) * 4;
       const noise = (Math.random() - 0.5) * 1.2;
       amplitude[k] = Math.max(0, envelope + noise); // |CSI| ≥ 0
     }
 
+    // Sanitized phase is detrended → a small signed ripple centered on 0 (NOT the
+    // amplitude envelope). Model it so the zero-centered phase panel reads as alive.
+    const phase = new Array<number>(subcarriers);
+    for (let k = 0; k < subcarriers; k++) {
+      const x = k / subcarriers;
+      phase[k] =
+        Math.sin(2 * Math.PI * (x * 2 + t * 0.1 + rxPhase)) * 0.15 +
+        (Math.random() - 0.5) * 0.03;
+    }
+
     // Doppler: strong DC (bin 0) + a small, slowly-breathing low-frequency spread.
-    const spread = 1.5 + Math.sin(t * 0.5 + phase) * 1.0; // "activity" breathing
+    const spread = 1.5 + Math.sin(t * 0.5 + rxPhase) * 1.0; // "activity" breathing
     const dopplerMean = new Array<number>(dopplerBins);
     for (let b = 0; b < dopplerBins; b++) {
       const dc = b === 0 ? 30 : 0;
@@ -41,7 +51,7 @@ export function startMockDspEmitter(
       dopplerMean[b] = dc + tail + Math.random() * 0.4;
     }
 
-    return { rxIndex, amplitude, dopplerMean };
+    return { rxIndex, amplitude, phase, dopplerMean };
   };
 
   const id = setInterval(() => {

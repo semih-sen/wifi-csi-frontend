@@ -21,6 +21,7 @@ interface HeatmapCanvasProps {
   /** Bounded horizontal history in columns (the "last N seconds" cap). */
   maxCols?: number;
   className?: string;
+  gamma?: number;
   /** value→[r,g,b] after normalization to [0,1]. Defaults to a magma-like ramp. */
   palette?: (t: number) => [number, number, number];
 }
@@ -60,7 +61,7 @@ function magma(t: number): [number, number, number] {
  * element box, so there is no per-frame scaling maths.
  */
 export const HeatmapCanvas = forwardRef<HeatmapHandle, HeatmapCanvasProps>(
-  function HeatmapCanvas({ rows, maxCols = 256, className, palette = magma }, ref) {
+  function HeatmapCanvas({ rows, maxCols = 256, className, palette = magma, gamma = 1 }, ref) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
     // Ring buffer + draw state, all in refs (never React state per column).
@@ -137,8 +138,9 @@ export const HeatmapCanvas = forwardRef<HeatmapHandle, HeatmapCanvasProps>(
             const srcCol = ((h - 1 - ageFromRight) % maxCols + maxCols) % maxCols;
             const base = srcCol * rows;
             for (let y = 0; y < rows; y++) {
-              const t = r[base + y] / smax;
-              const [cr, cg, cb] = palette(t);
+                 let t = r[base + y] / smax;               // 0..1 linear
+if (gamma !== 1) t = Math.pow(t, gamma);  // gamma<1 → alçak değerleri yukarı çeker
+const [cr, cg, cb] = palette(t);
               const idx = (y * maxCols + x) * 4;
               data[idx] = cr;
               data[idx + 1] = cg;
@@ -158,6 +160,8 @@ export const HeatmapCanvas = forwardRef<HeatmapHandle, HeatmapCanvasProps>(
         }
         ctx.putImageData(image, 0, 0);
       };
+
+   
 
       raf = requestAnimationFrame(paint);
       return () => cancelAnimationFrame(raf);
